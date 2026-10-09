@@ -28,48 +28,79 @@ jobs:
       - name: Configure Android SDK
         shell: bash
         run: |
-          set -euo pipefail
-
+          set -o pipefail
           SDK_ROOT="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
-          echo "Android SDK: $SDK_ROOT"
+          echo "SDK root: $SDK_ROOT" | tee sdk.log
 
-          test -d "$SDK_ROOT/cmdline-tools"
+          find "$SDK_ROOT/cmdline-tools" \
+            -type f -name sdkmanager -print \
+            2>&1 | tee -a sdk.log
 
           SDKMANAGER="$(find "$SDK_ROOT/cmdline-tools" \
             -type f -name sdkmanager | sort -V | tail -n 1)"
 
-          test -n "$SDKMANAGER"
-          echo "$(dirname "$SDKMANAGER")" >> "$GITHUB_PATH"
-          echo "$SDK_ROOT/platform-tools" >> "$GITHUB_PATH"
+          if [ -z "$SDKMANAGER" ]; then
+            echo "ERROR: sdkmanager not found" | tee -a sdk.log
+            exit 1
+          fi
 
-          yes | "$SDKMANAGER" --licenses || true
+          yes | "$SDKMANAGER" --licenses \
+            2>&1 | tee -a sdk.log || true
 
           "$SDKMANAGER" \
             "platform-tools" \
-            "platforms;android-35" \
-            "build-tools;35.0.0"
+            "platforms;android-34" \
+            "build-tools;34.0.0" \
+            2>&1 | tee -a sdk.log
 
-      - name: Set up Gradle 8.7
+      - name: Set up Gradle 8.0
         uses: gradle/actions/setup-gradle@v4
         with:
-          gradle-version: '8.7'
+          gradle-version: '8.0'
 
       - name: Verify project files
+        shell: bash
         run: |
-          test -f settings.gradle
-          test -f build.gradle
-          test -f app/build.gradle
-          test -f app/src/main/AndroidManifest.xml
-          test -f app/src/main/java/com/fwb/browser/MainActivity.java
+          set -e
+          {
+            pwd
+            ls -la
+            test -f settings.gradle
+            test -f build.gradle
+            test -f app/build.gradle
+            test -f app/src/main/AndroidManifest.xml
+            test -f app/src/main/java/com/fwb/browser/MainActivity.java
+            echo "Project file checks passed."
+          } 2>&1 | tee verify.log
 
       - name: Build Debug APK
-        run: gradle --no-daemon assembleDebug
+        shell: bash
+        run: |
+          set +e
+          gradle --no-daemon --stacktrace --info assembleDebug \
+            2>&1 | tee build.log
+          RESULT=${PIPESTATUS[0]}
+          echo "Gradle exit code: $RESULT" | tee -a build.log
+          exit "$RESULT"
 
-      - name: Upload APK artifact
+      - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: FWB_5-Desktop-APK
           path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
+          retention-days: 14
+
+      - name: Upload diagnostic logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: FWB_5-Build-Logs
+          path: |
+            sdk.log
+            verify.log
+            build.log
+          if-no-files-found: warn
           retention-days: 14
 ```
